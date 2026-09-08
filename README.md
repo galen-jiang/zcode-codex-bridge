@@ -1,97 +1,94 @@
-# zcode-codex-bridge
+# Token 杠杆
 
-将 ZCode 桌面编码代理接入 Codex 任务流的回传桥与编排技能集合：worker 完成工作后，通过受控回执（receipt）、有界回传投递（delivery）与协调端对账兜底（reconcile）形成可审计的闭环。包含两个技能与配套脚本；CLI worker 的编排不等于具有桌面自动回传能力。
+> 中文为默认首页 · English: [README.en.md](README.en.md)
 
-> 本项目按“现状”发布，不承诺官方支持、无人值守可靠送达或跨平台验证；仅在作者环境（macOS）验证过。
+**让 Codex 负责规划与验收，让 ZCode 承担具体执行。**
 
-## 前提
+zcode-codex-bridge 是连接 Codex 与 ZCode 桌面端的任务协作工具，支持任务派发、结果回传和状态核对，减少在两个应用之间手动转发任务与结果的操作。
 
-- macOS（依赖 macOS 辅助功能/自动化权限的 Computer Use 回传路径）
-- 已安装并登录 ZCode 桌面版与 Codex 桌面版
-- Node.js 22（本次验证版本；仅标准库，无第三方依赖）
-- Python 3（仅标准库，用于 UI guard 及其测试）
-- 你的 ZCode/Codex 客户端需支持对应的 UI 自动化入口；技能文档中涉及 CUA 的说明以随包 `scripts/zcode_ui_guard.py` 实际支持为准
+在 ZCode 提供免费额度的时段，你可以将编码、测试等执行工作交给 ZCode，把 Codex 的额度更多地用于问题分析、任务规划和结果检查。使用哪个模型、允许修改哪些文件，以及任务何时停止，均在派发前确定。
 
-## 目录
+[快速开始](#快速开始) · [第一个任务](#第一个任务) · [使用限制](#使用限制) · [开发与测试](#开发与测试)
 
-```
-skills/codex-callback-bridge/     回传桥技能（receipt/delivery/reconcile 三入口 + 78 项测试）
-skills/orchestrating-coding-workers/  编排技能（派发/验收/续推的协调约定）
-scripts/coordinator-run-v1.mjs    协调端状态机（账本创建、派发、验收、对账）
-scripts/zcode_ui_guard.py         UI 操作守卫（Hook 集成）
-tests/guard/                      guard 的 Python 测试
-```
+## 主要功能
 
-## 安装
+- **任务派发**：在 Codex 中明确目标、工作目录和修改范围，再交给 ZCode 执行。
+- **结果回传**：ZCode 完成工作后，将结果返回原 Codex 任务，继续检查与验收。
+- **状态核对**：保留任务记录和领取回执，回传中断时可检查进度，避免盲目重复派发。
+- **安装引导**：提供安装预览、确认和自检，详细配置与排障另附文档。
 
-1. `skills/codex-callback-bridge/` 复制到 **ZCode 侧**技能目录（如 `~/.zcode/skills/`）——回传桥由 ZCode worker 加载。
-2. `skills/orchestrating-coding-workers/` 复制到 **Codex 调度端**可发现的技能目录，例如 `~/.agents/skills/`。两端角色不同，请分别安装并确认客户端能加载。
-3. 保留 `scripts/coordinator-run-v1.mjs` 于固定位置，通过 `node /absolute/path/coordinator-run-v1.mjs <command> '<json-config>'` 调用。状态目录优先级为显式 `config.stateDir`、环境变量 `CODEX_BRIDGE_STATE_DIR`、默认 `~/.codex/state/zcode-runs`；值须为规范化绝对路径且末级目录名为 `zcode-runs`，非法显式值（包括 null）拒绝而不回退。`reconcile-receipt` / `review-holder` 另要求 `ZCODE_CALLBACK_BRIDGE_RECONCILE` 指向已安装 bridge 的 `scripts/reconcile.mjs` 绝对路径。
-4. UI guard 复制到 `~/.codex/hooks/zcode_ui_guard.py`，按你现有 Hook 配置**合并**接入（见下），绝不整体覆盖已有 `hooks.json`。这是宿主 Hook 集成，不会因为复制 skill 就自动启用。
-5. 模型/路由由安装者显式选择（协调端派发配置使用 `zcodeModel`），本包不预设模型型号。文档中的 `<skills-install-root>` 指实际的 ZCode 技能父目录；所有尖括号都是待替换示例，不是可直接执行的 shell 参数。
+> 免费额度的开放时间及使用条件，以 ZCode 的实际规则和你的账户资格为准。本项目不提供免费额度、不绕过平台限制，也不承诺具体的节省比例。
 
-`ZCODE_CALLBACK_BRIDGE_RECONCILE` 的绝对路径是安装要求，用于避免调用目录歧义；当前协调脚本仅校验其非空，不自动验证该路径的来源或可信性。
+## 快速开始
 
-这不是一键任务队列：创建运行需要具体工作区基线、有限授权和回传目标，见编排技能的 `references/autonomous-runs.md` 与脚本入口。只有明确选定的 Task 才能派发，安装不授予任何项目写权限。
-
-## 合并 Hook 配置示例
-
-下面是已核对的宿主结构示例。将命令路径替换为实际绝对路径，按事件追加内部条目；保留已有 Hook。宿主必须提供 `session_id`、`hook_event_name`、`tool_name`、`tool_input` 和 PostToolUse 的 `tool_response`，并执行 guard 返回的拒绝决定。若当前版本不支持此结构或事件，先验证适配，不能宣称互斥已生效。
-
-```json
-{
-  "hooks": {
-    "PreToolUse": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "python3 /path/to/zcode_ui_guard.py", "timeout": 5 }] }],
-    "PostToolUse": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "python3 /path/to/zcode_ui_guard.py", "timeout": 3 }] }],
-    "Stop": [{ "hooks": [{ "type": "command", "command": "python3 /path/to/zcode_ui_guard.py", "timeout": 3 }] }],
-    "Interrupt": [{ "hooks": [{ "type": "command", "command": "python3 /path/to/zcode_ui_guard.py", "timeout": 3 }] }],
-    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "python3 /path/to/zcode_ui_guard.py", "timeout": 3 }] }]
-  }
-}
-```
-
-guard 的状态默认在 `~/.codex/state/zcode-ui-lock.json`，可用 `CODEX_ZCODE_UI_STATE_PATH` 覆盖。它对 `mcp__cua_repl.js` / `mcp__cua_repl__js` 的全部调用保守加锁（包括只读调用），另识别受支持的 `sky` 变更调用；不是所有工具/API 的通用互斥。发送调用须带文档指定的中文标记并提供完整发送后 UI 证据，才即时释放；终止事件只释放同 session 的锁。先在隔离环境跑下面的 guard 测试，再检查宿主真实事件接线。
-
-## 卸载 / 回滚
-
-- 先停止相关 writer、后台活动和调度，确认 receipt 不再 active，再移除已复制的两个技能目录与协调端入口文件；
-- 从 `hooks.json` 中移除你添加的 guard 条目（只删自己加的部分）；
-- 回滚约束：账本状态目录不能无条件整目录覆盖还原——永久 receiver 回执、successor fence 等历史必须保留，且已 `stopped` 的 run 处于防重放终态，停机/回滚也不得回退该状态。只恢复你明确备份且理解其语义的文件，离线静默操作。
-
-## 测试
+目前仅在 macOS 上验证。开始前，请安装并登录 Codex 和 ZCode 桌面版，并准备好 Node.js 22+ 与 Python 3。脚本只使用标准库，不会自动下载依赖或请求 `sudo`。
 
 ```sh
-# 回传桥全量（78 项，均为临时 fixture，不触真实账本）
-CANDIDATE_BRIDGE=<本包>/skills/codex-callback-bridge \
-COORDINATOR_CANDIDATE=<协调端入口> \
-node --test <本包>/skills/codex-callback-bridge/tests/*.test.mjs
-
-# 隐私扫描（应输出 PRIVACY_SCAN_CLEAN）
-node <本包>/scripts/privacy-scan.mjs <本包>
-
-# UI guard（Python；从仓库任意根目录可复现，脚本在 scripts/ 下）
-PYTHONPATH=<本包>/scripts python3 -m unittest discover -s <本包>/tests/guard -p "test_*.py" -q
-
-# 默认路径、覆盖优先级、非法输入与扫描器回归
-COORDINATOR_CANDIDATE=<本包>/scripts/coordinator-run-v1.mjs \
-node --test <本包>/tests/*.test.mjs
+git clone https://github.com/galen-jiang/zcode-codex-bridge.git
+cd zcode-codex-bridge
+node scripts/setup.mjs
 ```
 
-## 隐私与安全边界
+安装器会先列出将要修改的路径。检查后输入 `yes`，再开始安装并运行自检；取消则不写入文件。
 
-- 账本/回执/锁只写入声明的状态目录；测试只使用隔离临时目录。
-- 回执目录是一次性领取（irreversible claim），回传消息必须与验收锚点逐字匹配；未知是否发送过时先只读核验，绝不盲目重发。
-- 协调端对账只将已释放的 completed 回执推进到 `reviewing`，绝不直接判定 accepted 或自动续派。
-- 隐私扫描器仅做通用启发式检查：用户绝对路径、邮箱和一个既知模型字串；不识别任意真实任务 ID、所有模型偏好、秘密或编码数据。它扫描自身和测试文本，但跳过 `.git`、依赖/缓存目录及部分二进制扩展，不能代替发布对象清单、私有已知值扫描与人工审计。
-- 发行内容使用合成任务标识与路径占位符，仅保留许可中的公开作者昵称。分享前仍应独立检查文件名、隐藏文件、历史、日志、邮箱及凭据；不要把私有敏感值清单写入公开扫描器。
+只想查看安装计划，可以运行 `node scripts/setup.mjs --preview`。在脚本等非交互环境中安装，需使用 `node scripts/setup.mjs --yes` 明确确认。
 
-## 局限
+安装后还需要在客户端中审查并信任 Hook，以及确认 macOS 所需权限。自检通过不代表桌面回传已经可用，建议继续完成下面的只读任务。
 
-- 未在 Linux/Windows 验证；Computer Use 路径依赖 macOS。
-- 回传采用有界重试与显式发送证据；无法确认是否发送时只读核对，不盲目重发，不承诺 exactly-once。
-- UI guard 的闲置接管策略不等同于运行账本/receipt 的永久防重放约束；本包不是抵御恶意本地进程的安全隔离边界。
-- 公开 coordinator 没有 active/失联 writer 的强制 terminalization 命令。遇到 receiver 仍 active 或 owner 无法核实时必须保持 checkpoint；不能猜命令、手改 receipt、删锁或重建 run 来继续。完整终止需要部署方另行具备并审查相应恢复工具，本包不提供该能力。
-- 恢复需要显式授权的会话触发；没有后台守护进程或自唤醒。
+## 第一个任务
+
+将项目路径和模型名称替换为自己的选择，然后把这段话发给 Codex：
+
+```text
+请把下面这个只读任务交给 ZCode：
+工作区：<你的项目路径>
+模型：<你选择的模型>
+阅读 README.md，用不超过 20 行总结安装步骤，不得修改任何文件。
+完成后将结果回传到当前 Codex 任务，由你检查。
+```
+
+Codex 会据此准备任务并派发。ZCode 返回结果后，Codex 再检查是否符合要求；收到“已完成”消息不代表验收已经通过。首次尝试只读取文件，便于先确认两个应用之间的协作是否正常。
+
+模型由你选择，并在派发配置中填写为 `zcodeModel`，本包不预设模型。安装工具也不等于授权所有后续任务：执行范围和停止条件仍需逐次明确。
+
+需要查看安装位置、Hook 配置或对账命令，请阅读[安装指南](docs/installation.md)。自检报错、回传未到或任务状态不明时，请先查看[排障指南](docs/troubleshooting.md)，不要直接重复派发。
+
+## 使用限制
+
+- **依赖桌面环境。** 自动回传需要 ZCode 自带的 Computer Use，以及 macOS 辅助功能、自动化等权限。权限由你手动授予，安装器不会代为确认；CLI 执行方式不自带桌面回传能力。其他平台尚未验证。
+- **回传可能中断。** 重试有次数与时间限制；无法确认消息是否发送时，先核对记录，不盲目重发。本项目不保证每条消息恰好送达一次（exactly-once），也不保证无人值守时可靠送达。
+- **没有后台自唤醒。** 会话结束后，不会在后台自动恢复任务；需要重新授权一个会话处理。
+- **不会强制接管失联任务。** 公开协调脚本没有强制终止执行中任务的命令。领取回执仍为 `active` 时，应保留现场，按排障指南处理，不要手改账本或删除锁来重置。
+- **UI 互斥有适用范围。** UI guard 只约束受支持的工具调用，不覆盖所有工具或 API，也不是防范恶意本地进程的隔离机制。
+- **安装失败可能需要人工恢复。** 无法确认文件归属时，安装器会保留现场和可用备份，并提示人工核对，不保证所有失败都能自动回滚。
+
+项目按“现状”提供，不承诺官方支持。详细的权限、恢复和卸载说明见[安装指南](docs/installation.md)与[排障指南](docs/troubleshooting.md)。
+
+## 开发与测试
+
+在仓库根目录运行以下命令。安装与状态测试使用隔离的临时目录，不操作真实运行账本。
+
+```sh
+# 回传桥
+CANDIDATE_BRIDGE="$PWD/skills/codex-callback-bridge" \
+COORDINATOR_CANDIDATE="$PWD/scripts/coordinator-run-v1.mjs" \
+node --test skills/codex-callback-bridge/tests/*.test.mjs
+
+# UI guard
+PYTHONPATH="$PWD/scripts" python3 -B -m unittest discover -s tests/guard -p 'test_*.py' -q
+
+# 安装引导、路径与扫描器等测试
+COORDINATOR_CANDIDATE="$PWD/scripts/coordinator-run-v1.mjs" node --test tests/*.test.mjs
+
+# 隐私扫描（应输出 PRIVACY_SCAN_CLEAN）
+node scripts/privacy-scan.mjs .
+```
+
+### 状态与隐私
+
+账本、回执和锁只写入指定的状态目录。对账命令只会将匹配且已释放的 `completed` 回执转为待验收状态（`reviewing`），不会直接判定通过或自动派发下一任务。
+
+隐私扫描器用于发现常见的敏感信息，不能覆盖所有情况。分享或发布文件前，仍需检查文件清单、已知的私人信息和实际内容。
 
 ## 许可
 
