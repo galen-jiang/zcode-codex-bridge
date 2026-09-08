@@ -1,0 +1,6 @@
+interface:
+  display_name: "调度编码 Worker"
+  short_description: "在 ZCode、Claude 与 Codex 之间安全调度并验收编码任务"
+  default_prompt: "使用 $orchestrating-coding-workers 为当前编码任务选择 worker、派发并独立验收。"
+policy:
+  allow_implicit_invocation: true
