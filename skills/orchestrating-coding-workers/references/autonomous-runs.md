@@ -7,13 +7,17 @@
 自治单位是一个有终点的里程碑，不是整个项目。仅当用户批准以下完整契约时建立有限自治租约：
 
 - 唯一 `run_id`、里程碑目标和可验证终止条件。
-- 有限且有序的 `approved_tasks`；新发现的工作只进入候选清单。
+- 有限且有序的 `approved_tasks`；先按 [派发单位](../SKILL.md#派发单位)归并为交付目标级工作包，原计划的编号 Task 留在 brief 内部清单，不逐项登记为工作包。新发现的工作只进入候选清单。
 - `max_dispatches`。用户未指定时取 `min(3, approved_tasks 数量)`。
 - `max_repairs_per_task`。用户未指定时为 `1`；一次验收中的 findings 合并成一轮窄返修。
-- 每个 attempt 的 worker 侧硬边界：用户未指定时为最多 `2` 个“文件修改批次→一次聚焦验证”循环、最长 `30` 分钟、最多 `1` 次全量测试。一次修改阶段之后执行一次聚焦验证就算一个完整循环；同一 Task、写集和风险边界内，新失败揭示的直接因果修复属于剩余循环，不因它偏离提示词中的候选行或补丁而提前阻塞。派发时把限制换算成明确计数和带 `Z` 或 UTC offset 的 RFC 3339 `stop_at`。
+- 每个 attempt 的 worker 侧硬边界：派发前按整包计划估算并在提示词中明写 `work_cycles`、`minutes`、`full_suite_runs` 与绝对 `stop_at`。用户未指定且包较小时可兜底取最多 `2` 个“文件修改批次→一次聚焦验证”循环、最长 `30` 分钟、最多 `1` 次全量测试；这不按计划步骤数量拆分或复制，90 分钟多步骤的包就应估算出更大的有限预算。一次修改阶段之后执行一次聚焦验证就算一个完整循环；同一 Task、写集和风险边界内，新失败揭示的直接因果修复属于剩余循环，不因它偏离提示词中的候选行或补丁而提前阻塞。计划内先失败后通过的验证序列（例如 RED→GREEN）按正常循环计数，不算重复失败或零 diff 停机；停机条件保留为同一失败再现、无有效 diff 或新证据、预算耗尽、到达 `stop_at`。派发时把限制换算成明确计数和带 `Z` 或 UTC offset 的 RFC 3339 `stop_at`。
 - 明确的写集、Git 权限和必须停下等待用户的风险边界。
 
 开放式“持续做”“不要每次问”只表示用户希望自治；调度者先把它翻译成上述有限契约并取得批准，不能据此创建无限租约。每次租约耗尽后必须停在 checkpoint，由用户续租。
+
+`stop_at` 不晚于实际派发时刻加 `minutes`，并取授权工作时段结束时间的更早者；循环数覆盖计划内验证及有限自修，不把时间预算单独赋给每个步骤。此规则用于新派发：已经派发（`dispatched`）的 run 继续遵守原 `approved_tasks`、写集、预算和截止时间，不因技能更新而中断，也不追溯合并、延长或重置；旧边界触发时仍按原协议停止。
+
+这些是调度者与 worker 的执行约束，不是进程级强制限额。现有 helper 记录预算并校验基本字段，未替调用方估算循环或强制校验 `minutes` 与 `stop_at` 的差值；调度者必须在派发落账前核对上述时间关系。发送前 `dispatching` 且未 claim 的准备状态仍按原协议处理，不能用它改写已经派发的 attempt。
 
 ## 可重建基线
 
@@ -55,6 +59,10 @@
 }
 ```
 
+`attempt_limits` 的字段固定为 `work_cycles`、`minutes`、`full_suite_runs` 与 `stop_at`，取值按整包计划在派发前估算；上例数字只是小包示例，不是通用默认值。一个工作包内的全部内部实现—验证循环共用同一次派发与一个 `attempt`，不在账本中为内部步骤新建条目或消耗 dispatch。
+
+每次 attempt 的结束顺序：先停止全部项目活动；截止前全部验收项已通过且未超出次数时记 `completed`，包括恰好用完次数；有待裁决的权限/需求问题记 `needs_decision`；尚未完成且无法在剩余次数或时间内继续则记 `blocked`。随后按结果 release 一次、enqueue、回报。终态回报结束的是本 attempt，不必等工作包成功才能释放；不保留 active receipt 等待批准。
+
 ## 单一协调者与原子迁移
 
 每个 run 终身只绑定一个不可变 Codex coordinator task，活跃 run 不做 owner 移交。任何读取后写入或外部动作前，先确认不存在 `<run_id>.tombstone`，再以原子 `mkdir` 取得 `<run_id>.lock`；取得后再次检查 tombstone。lock 内写入随机 `holder_id`、coordinator task ID 与不可变的 `acquired_at_revision`，并 fsync lock 内容、lock 目录和父目录。已被占用或任一 tombstone 检查命中，就不等待、不抢锁、不动作。
@@ -85,7 +93,7 @@ handoff 或新 coordinator 不能继承活跃租约：旧 run 先停在 checkpoi
 2. helper 逐字核对账本中的 coordinator task ID 与 `stop_at`，拒绝已过期 attempt；再生成随机 `receiver_id`，以原子 `mkdir` 创建永久 receipt 目录，并用原子文件替换写入 protocol、`run_id`、`dispatch_id`、coordinator task ID、`stop_at`、`receiver_id`、`status=active`，fsync receipt 与父目录；目录已存在就停止。
 3. 创建 receipt 后再次读取 tombstone 与账本；任一条件变化就由同一 `receiver_id` 原子写为 `abandoned`、fsync 并停止。只有二次校验通过才能首次修改 worktree。
 
-worker 保持 receipt 为 `active`，贯穿全部文件写入、项目进程、测试、Git 与后台活动；每个新的修改—验证循环和全量测试前通过 helper 再次校验 tombstone、账本状态、outstanding ID 与 receipt 身份。聚焦验证出现新失败时，只要有直接因果证据、仍在同一 Task/写集/风险边界且尚有循环，worker 就继续最小修复；“与预计补丁不同”本身不是阻塞原因。所有这类活动完全停止后，必须通过 helper 取得 transition lock，并以 `receiver_id + status=active` 为前置将 receipt 原子写为 `released` 并 fsync；若锁、身份或前置状态不符就停止回传。receipt 目录继续永久保留，然后才按全局 skill 验证 final 锚点并执行 Computer Use 回传或写最终报告。worker 自行计数：以“命令 + 测试名 + 首个稳定错误类型/项目相对位置”识别同一失败；同一失败连续出现两次、一个循环没有有效 diff 或新证据、达到循环/全量测试上限或到达 `stop_at`，任一发生就停止所有活动并以 `message_type=blocked` 回报。worker 不能自行开始下一 Task、扩展范围、无限“再试一次”，也不能把调度者的返修额度当作本 attempt 内的自助续命。
+worker 保持 receipt 为 `active`，贯穿整包的全部文件写入、项目进程、测试、Git 与后台活动；每个新的修改—验证循环和全量测试前通过 helper 再次校验 tombstone、账本状态、outstanding ID 与 receipt 身份。内部步骤之间不 release、不回传、不消耗新 dispatch，receipt 只在整包终态（完成、受阻或需决策）释放一次。聚焦验证出现新失败时，只要有直接因果证据、仍在同一 Task/写集/风险边界且尚有循环，worker 就继续最小修复；“与预计补丁不同”本身不是阻塞原因。计划内先失败后通过的验证序列（例如 RED→GREEN）属于正常循环，不触发重复失败或零 diff 停机。所有这类活动完全停止后，必须通过 helper 取得 transition lock，并以 `receiver_id + status=active` 为前置将 receipt 原子写为 `released` 并 fsync；若锁、身份或前置状态不符就停止回传。receipt 目录继续永久保留，然后才按全局 skill 验证 final 锚点并执行 Computer Use 回传或写最终报告。worker 自行计数：以“命令 + 测试名 + 首个稳定错误类型/项目相对位置”识别同一失败；同一失败在修复尝试后再次出现（连续两次）、一个循环没有有效 diff 或新证据、工作尚未完成且剩余循环/全量测试次数不足，或到达 `stop_at`，任一发生就停止所有活动并以 `message_type=blocked` 回报；在截止前、允许次数内已完成全部验收项则按前述结束顺序记 `completed`。worker 不能自行开始下一工作包、扩展范围、无限“再试一次”，也不能把调度者的返修额度当作本 attempt 内的自助续命。
 
 回报只有在 `run_id` 正确、`dispatch_id` 等于 outstanding 且尚未处理时有效；处理前还要确认该 attempt 的永久 receiver receipt protocol、双 ID、coordinator task ID、`stop_at` 与 receiver 身份正确、状态为 `released`，并且 receipt 的 `outcome` 逐字等于回报的 `message_type`，否则不能把回报解释为对应结果。receipt 仍为 `active` 时 writer 不算静默：停止处理该回报和所有新动作，保持 `dispatched` 并 checkpoint；需要停止 run 时必须走正式 fence/terminalization，且此时不把 dispatch 标为 handled。receipt 已终态但 outcome 与回报不一致时，用一次 CAS 将该 dispatch 记为 handled、清空 outstanding 并写为 `stopped`，记录 mismatch 后 checkpoint，绝不进入验收或续派。收到完全一致的有效回报后，用一次 CAS 原子记录 `message_type`、handled ID 与新状态：
 
@@ -106,14 +114,14 @@ worker 保持 receipt 为 `active`，贯穿全部文件写入、项目进程、�
 
 ## 验收、返修与续派
 
-只有 `completed` 进入验收。调度者持有 run lock 完成新鲜验收；将每个 finding 规范化为按键排序的 canonical JSON：规则/测试 ID、项目相对 POSIX 路径、稳定 symbol 与首个稳定错误 code/type，并去除行列位置、时间戳、PID、随机地址和临时绝对根目录，再以 SHA-256 计算 fingerprint。
+只有 `completed` 进入验收。调度者持有 run lock，以工作包为单位完成一次完整验收：对照整包验收清单逐项对账需求，审查自 accepted baseline 以来的全部新增 diff（不只最后一个内部步骤）与关键风险；新鲜验证按变更风险选择适用命令，纯文档等工作不要求与变更无关的 typecheck/build。将每个 finding 规范化为按键排序的 canonical JSON：规则/测试 ID、项目相对 POSIX 路径、稳定 symbol 与首个稳定错误 code/type，并去除行列位置、时间戳、PID、随机地址和临时绝对根目录，再以 SHA-256 计算 fingerprint。
 
 每次验收只允许一次终局 CAS，不留下“已判定但未决定下一动作”的中间态：
 
 - 失败且允许返修：同一 CAS 写入失败 verdict 与 fingerprints，预消耗 repair，换成新的 repair attempt/outstanding ID，清空 `message_type` 并直接 `reviewing → dispatching`。
 - 失败且达到 repair 上限、fingerprint 再现、没有有效新 diff 或 attempt 已越过自身硬边界：同一 CAS 清空 outstanding 并 `reviewing → stopped`。
 - 通过且里程碑终止条件成立：先生成并验证新 baseline snapshot，再用同一 CAS 写 baseline、通过 verdict、清空 outstanding 并 `reviewing → complete`。
-- 通过且可续派：先生成并验证新 baseline snapshot；必须满足不变量 `current_task == approved_tasks[task_cursor]`，且下一 Task 精确为 `approved_tasks[task_cursor + 1]`。只有下一 Task 与全部续派闸门成立、当前 attempt 未越界时，才用同一 CAS 写 baseline、通过 verdict、将 task cursor 加一并同步更新 current task、预消耗 task dispatch、换成新 attempt/outstanding ID、清空 `message_type` 并 `reviewing → dispatching`。
+- 通过且可续派：先生成并验证新 baseline snapshot；必须满足不变量 `current_task == approved_tasks[task_cursor]`，且下一工作包 精确为 `approved_tasks[task_cursor + 1]`。只有下一工作包 与全部续派闸门成立、当前 attempt 未越界时，才用同一 CAS 写 baseline、通过 verdict、将 task cursor 加一并同步更新 current task、预消耗 task dispatch、换成新 attempt/outstanding ID、清空 `message_type` 并 `reviewing → dispatching`。
 - 通过但不能续派：同一 CAS 写新 baseline 与通过 verdict、清空 outstanding 并 `reviewing → stopped`。
 
 若 `completed` 回报晚于 `stop_at`，或报告证明 worker 超过循环/全量测试边界，仍做一次验收以保留有效成果；除非验收通过且里程碑已经完成，否则必须 `stopped`，不能自动返修或续派。
@@ -121,17 +129,17 @@ worker 保持 receipt 为 `active`，贯穿全部文件写入、项目进程、�
 验收通过后按以下顺序决定：
 
 1. 若里程碑终止条件已经成立，选择 `complete` 分支。
-2. 里程碑未完成时，确认当前不变量成立，下一 Task 是 `approved_tasks[task_cursor + 1]`，且 brief、写集、成功标准和验证顺序完整。
-3. 确认 `dispatches.used < dispatches.max`，当前 attempt 未越界，并且下一 Task 不需要新的产品、架构、安全、兼容性或权限决策。
+2. 里程碑未完成时，确认当前不变量成立，下一工作包 是 `approved_tasks[task_cursor + 1]`，且 brief、写集、成功标准和验证顺序完整。
+3. 确认 `dispatches.used < dispatches.max`，当前 attempt 未越界，并且下一工作包 不需要新的产品、架构、安全、兼容性或权限决策。
 4. 全部成立才选择原子续派分支；任一不成立就选择 `stopped` 分支并记录 `stop_reason`。
 
-达到 repair 上限只在当前 Task 尚未通过时停止；已经验收通过的 Task 不因用完自身 repair 额度阻断下一 Task。最终 Task 同时命中里程碑与 dispatch 上限时以 `complete` 为准。
+达到 repair 上限只在当前 Task 尚未通过时停止；已经验收通过的 Task 不因用完自身 repair 额度阻断下一工作包。最终 Task 同时命中里程碑与 dispatch 上限时以 `complete` 为准。
 
 ## 必停条件
 
 - 一轮自动返修后仍未通过，或同一 finding 再现、没有可验收的新 diff。
 - worker 未静默、来源无法对应、基线不可重建、出现并发 writer 或越权文件。
-- 下一 Task 不在批准清单、brief 不完整，或需要扩大写集和外部副作用。
+- 下一工作包 不在批准清单、brief 不完整，或需要扩大写集和外部副作用。
 - 涉及新架构选择、公共 API、数据迁移、安全边界、破坏性 Git，或未授权的 commit、push、merge、amend。
 - worker/Computer Use 不可用，继续动作所需额度已经耗尽，或继续需要新增付费与权限；已经命中里程碑终止条件的完成态不被预算边界改写。
 - 用户暂停或改变目标；里程碑尚未完成且下一次 Task 或返修会超过已批准预算。

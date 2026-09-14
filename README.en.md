@@ -8,7 +8,7 @@ zcode-codex-bridge is a task-collaboration tool that connects Codex with the ZCo
 
 During periods when ZCode offers free quota, you can hand execution work such as coding and testing to ZCode and reserve more of your Codex quota for problem analysis, task planning, and result review. Which model to use, which files may be modified, and when a task stops are all determined before dispatch.
 
-[Quick start](#quick-start) · [Your first task](#your-first-task) · [Usage limits](#usage-limits) · [Development and testing](#development-and-testing)
+[Quick start](#quick-start) · [Your first task](#your-first-task) · [Work-package dispatch](#work-package-dispatch) · [Usage limits](#usage-limits) · [Development and testing](#development-and-testing)
 
 ## Key features
 
@@ -52,6 +52,29 @@ Codex prepares and dispatches the task accordingly. After ZCode returns, Codex c
 The model is your choice and is set as `zcodeModel` in the dispatch configuration; this package does not preset a model. Installing the tool also does not authorize all future tasks: the allowed scope and the stop conditions must be made explicit each time.
 
 For installation locations, Hook configuration, or reconciliation commands, read the [Installation Guide (Chinese)](docs/installation.md). If the self-check reports errors, a callback does not arrive, or a task's status is unclear, consult the [Troubleshooting Guide (Chinese)](docs/troubleshooting.md) before re-dispatching.
+
+## Work-package dispatch
+
+Once the read-only task confirms that collaboration works, dispatch a well-scoped feature as one complete work package: provide the requirements document, implementation plan, acceptance checklist, allowed files, and execution budget together. A plan with several numbered Tasks does not require a separate dispatch for each one. ZCode implements, tests, and repairs within that scope, then submits a consolidated report. Codex reviews all changes and checks coverage of the requirements.
+
+Ordinary implementation choices stay with ZCode. Requirement conflicts, unapproved architecture or interface decisions, migrations or destructive operations, security or permission changes, repeated failures, and insufficient budget still require it to stop and report. This reduces intermediate forwarding and repeated acceptance reviews, not necessary testing or risk checks.
+
+Replace the paths and contents with your own choices and send this to Codex:
+
+```text
+Please hand the following work package to ZCode in one dispatch:
+Workspace: <your project path>
+Branch and baseline: <branch name> at <full commit hash>
+Requirements document: <path to the complete requirements and acceptance checklist>
+Implementation plan: <path to the complete implementation plan>
+Read both documents in full and complete the numbered Tasks for this feature as internal steps.
+Write set: <files that may be modified>
+Verification: <focused tests and final regression requirements>
+Budget: <at most N implement-verify cycles, M minutes, and a full-suite run limit for the whole package>
+Report back once for the whole package when done, for a single acceptance review.
+```
+
+Estimate the budget for the whole package; N and M are placeholders. Codex records the counts and an absolute deadline before dispatch. Existing tasks retain their original scope and budget. See the [orchestration skill](skills/orchestrating-coding-workers/SKILL.md) and [callback skill](skills/codex-callback-bridge/SKILL.md) for the detailed rules.
 
 ## Usage limits
 

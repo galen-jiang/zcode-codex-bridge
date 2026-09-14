@@ -58,6 +58,10 @@ node <skills-install-root>/codex-callback-bridge/scripts/receipt.mjs assert-acti
 
 Any nonzero exit is a stop fence. Stop all project work and child processes. `release` remains allowed after a fence so the worker can record its terminal outcome.
 
+One claim covers the current attempt for the whole dispatched work package. Numbered Tasks in its plan are internal steps: run `assert-active` before each new cycle and each verification, repair in-scope failures while budget remains, and keep the same receipt without a callback or new dispatch between steps. Planned RED→GREEN is normal progress and still consumes the declared cycle budget. Repeated unplanned failures after repair, no effective diff or new evidence, or insufficient remaining budget to finish require stopping; no further work may run after `stop_at`.
+
+After stopping all activity, choose the attempt outcome: `completed` when all criteria passed before the deadline within the allowed counts (including exactly reaching a count limit); `needs_decision` when an identified requirement or permission decision is needed; otherwise `blocked` when work remains but a fence, repeated failure or exhausted budget prevents continuation. Release exactly once and enqueue before reporting. A decision need ends the attempt even though the package is unfinished: never keep the receipt `active` waiting for approval or resume a released attempt.
+
 After all project activity has stopped, release exactly once:
 
 ```sh
