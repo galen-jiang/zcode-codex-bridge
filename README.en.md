@@ -8,7 +8,7 @@ zcode-codex-bridge is a task-collaboration tool that connects Codex with the ZCo
 
 During periods when ZCode offers free quota, you can hand execution work such as coding and testing to ZCode and reserve more of your Codex quota for problem analysis, task planning, and result review. Which model to use, which files may be modified, and when a task stops are all determined before dispatch.
 
-[Quick start](#quick-start) · [Your first task](#your-first-task) · [Work-package dispatch](#work-package-dispatch) · [Usage limits](#usage-limits) · [Development and testing](#development-and-testing)
+[Quick start](#quick-start) · [Your first task](#your-first-task) · [Work-package dispatch](#work-package-dispatch) · [Usage limits](#usage-limits) · [Development and testing](#development-and-testing) · [Changelog (Chinese)](CHANGELOG.md)
 
 ## Key features
 
