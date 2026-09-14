@@ -2,9 +2,9 @@
 
 记录各版本面向使用者的重要变化，按发布时间倒序排列。版本日期以 GitHub Release 的 UTC 发布日期为准。
 
-## [未发布（Unreleased）]
+## [v0.1.0-beta.2] - 2026-09-14
 
-以下改动已合入 `main`，尚未包含在新的版本标签或 Release 中。
+第二个预览版本，收录首个预览版之后的全部主分支更新，重点调整工作包派发与统一验收流程。
 
 ### 调整
 
@@ -35,5 +35,5 @@
 - 目前仅在 macOS 上验证，需准备 Node.js 22+、Python 3，并安装、登录 Codex 与 ZCode 桌面版。
 - 自动回传依赖 ZCode 自带的 Computer Use 及桌面权限；自检通过不代表桌面回传已验证，不保证恰好一次送达或无人值守可靠送达，也不提供后台自唤醒。
 
-[未发布（Unreleased）]: https://github.com/galen-jiang/zcode-codex-bridge/compare/v0.1.0-beta.1...main
+[v0.1.0-beta.2]: https://github.com/galen-jiang/zcode-codex-bridge/releases/tag/v0.1.0-beta.2
 [v0.1.0-beta.1]: https://github.com/galen-jiang/zcode-codex-bridge/releases/tag/v0.1.0-beta.1
